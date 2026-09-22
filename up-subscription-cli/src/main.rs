@@ -16,7 +16,14 @@ use std::sync::Arc;
 use clap::Parser;
 use tokio::signal;
 use tracing::error;
-use up_subscription::{ConfigurationError, USubscriptionConfiguration, USubscriptionService};
+use up_rust::{
+    communication::{InMemoryRpcServer, RpcServer},
+    core::usubscription::{RESOURCE_ID_SUBSCRIBE, RESOURCE_ID_UNSUBSCRIBE},
+};
+use up_subscription::{
+    adapters::{DynTransport, DynUriProvider},
+    ConfigurationError, USubscriptionConfiguration, USubscriptionService,
+};
 
 #[cfg(feature = "mqtt5")]
 use up_transport_mqtt5::Mqtt5TransportOptions;
@@ -123,12 +130,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Transport::Zenoh { options } => get_zenoh_transport(&args.authority, options).await,
     }?;
 
-    // Set up and run USubscription service
-    let mut ustop = USubscriptionService::run(config.clone(), transport.clone())
+    let rpc_server = InMemoryRpcServer::new(
+        Arc::new(DynTransport::new(transport.clone())),
+        Arc::new(DynUriProvider::new(config.clone())),
+    );
+    let (service, stopper) = USubscriptionService::new(config, transport)
+        .run()
         .await
         .inspect_err(|e| error!("Error starting uSubscription service: {}", e))?;
+    let service = Arc::new(service);
+
+    rpc_server
+        .register_endpoint(None, RESOURCE_ID_SUBSCRIBE, service.clone())
+        .await?;
+    rpc_server
+        .register_endpoint(None, RESOURCE_ID_UNSUBSCRIBE, service.clone())
+        .await?;
 
     signal::ctrl_c().await.expect("failed to listen for event");
-    ustop.stop().await;
+    stopper.stop().await;
     Ok(())
 }

@@ -16,10 +16,8 @@ use std::sync::Arc;
 use tokio::sync::{mpsc::Receiver, mpsc::Sender, oneshot, Notify};
 use tracing::{debug, error, warn};
 use up_rust::{
-    core::usubscription::{
-        usubscription_uri, SubscriberInfo, SubscriptionStatus, Update,
-        RESOURCE_ID_SUBSCRIPTION_CHANGE,
-    },
+    communication::SubscriptionStatus,
+    core::usubscription::{usubscription_uri, SubscriptionInfo, RESOURCE_ID_SUBSCRIPTION_CHANGE},
     LocalUriProvider, UMessageBuilder, UTransport, UUID,
 };
 
@@ -165,16 +163,13 @@ pub(crate) async fn notification_engine(
                 respond_to,
             } => {
                 // [impl->dsn~usubscription-change-notification-type~1]
-                let update = Update {
-                    topic: Some(topic.clone()).into(),
-                    subscriber: Some(SubscriberInfo {
-                        uri: subscriber.into(),
-                        ..Default::default()
-                    })
-                    .into(),
-                    status: Some(status).into(),
-                    ..Default::default()
-                };
+                let update = SubscriptionInfo::new(
+                    topic.clone(),
+                    subscriber.expect("msg"),
+                    status,
+                    None,
+                    None,
+                );
 
                 // Send Update message to general notification channel
                 // as per usubscription.proto RegisterForNotifications(NotificationsRequest)
@@ -204,12 +199,8 @@ pub(crate) async fn notification_engine(
                         debug!(
                             "Sending notification to ({}), about topic {} changing state to {}",
                             subscribers_entry.to_uri(INCLUDE_SCHEMA),
-                            update
-                                .topic
-                                .as_ref()
-                                .unwrap_or_default()
-                                .to_uri(INCLUDE_SCHEMA),
-                            update.status.as_ref().unwrap_or_default()
+                            update.topic(),
+                            update.status()
                         );
 
                         match UMessageBuilder::notification(

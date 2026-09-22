@@ -21,8 +21,9 @@ mod tests {
     };
 
     use up_rust::{
+        communication::SubscriptionStatus,
         core::usubscription::{
-            usubscription_uri, State, SubscriptionStatus, Update, RESOURCE_ID_SUBSCRIPTION_CHANGE,
+            usubscription_uri, SubscriptionInfo, RESOURCE_ID_SUBSCRIPTION_CHANGE,
         },
         LocalUriProvider, UMessage, UMessageBuilder, UUID,
     };
@@ -147,7 +148,7 @@ mod tests {
     async fn test_add_notifyee() {
         let command_sender = CommandSender::new(Arc::new(CommandSender::get_config()), vec![]);
 
-        let expected_subscriber = test_lib::helpers::subscriber_info1().uri.unwrap();
+        let expected_subscriber = test_lib::helpers::subscriber_uri1();
         let expected_topic = test_lib::helpers::local_topic1_uri();
 
         command_sender
@@ -170,7 +171,7 @@ mod tests {
         let command_sender = CommandSender::new(Arc::new(CommandSender::get_config()), vec![]);
 
         // prepare things
-        let expected_subscriber = test_lib::helpers::subscriber_info1().uri.unwrap();
+        let expected_subscriber = test_lib::helpers::subscriber_uri1();
         let expected_topic = test_lib::helpers::local_topic1_uri();
 
         #[allow(clippy::mutable_key_type)]
@@ -203,20 +204,18 @@ mod tests {
     async fn test_state_change() {
         // prepare things
         // this is the status&topic&subscriber that the notification is about
-        let changing_status = SubscriptionStatus {
-            state: State::SUBSCRIBED.into(),
-            ..Default::default()
-        };
+        let changing_status = SubscriptionStatus::Subscribed;
         let changing_topic = test_lib::helpers::local_topic1_uri();
-        let changing_subscriber = test_lib::helpers::subscriber_info1();
+        let changing_subscriber = test_lib::helpers::subscriber_uri1();
 
         // the update message that we're expecting
-        let expected_update = Update {
-            topic: Some(changing_topic.clone()).into(),
-            subscriber: Some(changing_subscriber.clone()).into(),
-            status: Some(changing_status.clone()).into(),
-            ..Default::default()
-        };
+        let expected_update = SubscriptionInfo::new(
+            changing_topic.clone(),
+            changing_subscriber.clone(),
+            changing_status.clone(),
+            None,
+            None,
+        );
 
         // this is the generic update channel notification, that always is sent
         // [utest->dsn~usubscription-change-notification-topic~1]
@@ -233,11 +232,7 @@ mod tests {
 
         // operation to test
         let r = command_sender
-            .state_change(
-                changing_subscriber.uri.unwrap_or_default(),
-                changing_topic.clone(),
-                changing_status,
-            )
+            .state_change(changing_subscriber, changing_topic, changing_status)
             .await;
         assert!(r.is_ok())
     }
@@ -247,21 +242,18 @@ mod tests {
     async fn test_state_change_direct_notification() {
         // prepare things
         // this is the status&topic&subscriber that the notification is about
-        let changing_status = SubscriptionStatus {
-            state: State::SUBSCRIBED.into(),
-            ..Default::default()
-        };
+        let changing_status = SubscriptionStatus::Subscribed;
         let changing_topic = test_lib::helpers::local_topic1_uri();
-        let interested_subscriber = test_lib::helpers::subscriber_info1();
-        let interested_subscriber_uri = interested_subscriber.uri.clone().unwrap();
+        let interested_subscriber = test_lib::helpers::subscriber_uri1();
 
         // the update message that we're expecting
-        let expected_update = Update {
-            topic: Some(changing_topic.clone()).into(),
-            subscriber: Some(interested_subscriber.clone()).into(),
-            status: Some(changing_status.clone()).into(),
-            ..Default::default()
-        };
+        let expected_update = SubscriptionInfo::new(
+            changing_topic.clone(),
+            interested_subscriber.clone(),
+            changing_status.clone(),
+            None,
+            None,
+        );
 
         // this is the generic update channel notification, that always is sent
         let expected_message_general_channel =
@@ -274,7 +266,7 @@ mod tests {
         let config = Arc::new(CommandSender::get_config());
         let expected_notitication_message = UMessageBuilder::notification(
             config.get_resource_uri(SOURCE_URI_RESOURCE_ID),
-            interested_subscriber_uri.clone(),
+            interested_subscriber.clone(),
         )
         .with_message_id(UUID::build())
         .build_with_protobuf_payload(&expected_update)
@@ -290,17 +282,13 @@ mod tests {
         );
 
         command_sender
-            .add_notifyee(interested_subscriber_uri.clone(), changing_topic.clone())
+            .add_notifyee(interested_subscriber.clone(), changing_topic.clone())
             .await
             .expect("Error preparing test case context");
 
         // operation to test - we now expect two messages, the general-channel notification as well as the direct notification to subscriber1
         let r = command_sender
-            .state_change(
-                interested_subscriber_uri,
-                changing_topic.clone(),
-                changing_status,
-            )
+            .state_change(interested_subscriber, changing_topic, changing_status)
             .await;
         assert!(r.is_ok())
     }
@@ -310,21 +298,18 @@ mod tests {
     async fn test_unregister_direct_notification() {
         // prepare things
         // this is the status&topic&subscriber that the notification is about
-        let changing_status = SubscriptionStatus {
-            state: State::SUBSCRIBED.into(),
-            ..Default::default()
-        };
+        let changing_status = SubscriptionStatus::Subscribed;
         let changing_topic = test_lib::helpers::local_topic1_uri();
-        let interested_subscriber = test_lib::helpers::subscriber_info1();
-        let interested_subscriber_uri = interested_subscriber.uri.clone().unwrap();
+        let interested_subscriber = test_lib::helpers::subscriber_uri1();
 
         // the update message that we're expecting
-        let expected_update = Update {
-            topic: Some(changing_topic.clone()).into(),
-            subscriber: Some(interested_subscriber.clone()).into(),
-            status: Some(changing_status.clone()).into(),
-            ..Default::default()
-        };
+        let expected_update = SubscriptionInfo::new(
+            changing_topic.clone(),
+            interested_subscriber.clone(),
+            changing_status.clone(),
+            None,
+            None,
+        );
 
         // this is the generic update channel notification, that always is sent
         let expected_message_general_channel =
@@ -340,7 +325,7 @@ mod tests {
         // pre-set notification manager with direct-notification request for topic1 by subscriber1
         command_sender
             .set_notification_topics(vec![(
-                interested_subscriber_uri.clone(),
+                interested_subscriber.clone(),
                 changing_topic.clone(),
             )])
             .await
@@ -354,22 +339,18 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(
             list.first().expect("Error preparing test case context"),
-            &(interested_subscriber_uri.clone(), changing_topic.clone())
+            &(interested_subscriber.clone(), changing_topic.clone())
         );
 
         // Unsubscribe subscriber1 for notifications on topic1
         command_sender
-            .remove_notifyee(interested_subscriber_uri.clone(), changing_topic.clone())
+            .remove_notifyee(interested_subscriber.clone(), changing_topic.clone())
             .await
             .expect("Error preparing test case context");
 
         // operation to test - we're now only expecting the general-channel notification message
         let r = command_sender
-            .state_change(
-                interested_subscriber_uri,
-                changing_topic.clone(),
-                changing_status,
-            )
+            .state_change(interested_subscriber, changing_topic, changing_status)
             .await;
         assert!(r.is_ok())
     }

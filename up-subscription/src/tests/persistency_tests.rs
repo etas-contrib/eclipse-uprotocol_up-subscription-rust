@@ -13,8 +13,8 @@
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    use tokio::time::{sleep, Duration};
+    use std::time::{Duration, SystemTime};
+    use tokio::time::sleep;
 
     use crate::{persistency, test_lib, USubscriptionConfiguration};
 
@@ -34,11 +34,6 @@ mod tests {
         let mut subscriptions = persistency::SubscriptionsStore::new(&get_configuration());
 
         // Prepare subscription persistency with two subscriptions, one with and one without expiry timestamp
-        let expiry_in_1s = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-            + 1000;
         let _ = subscriptions.add_subscription(
             &test_lib::helpers::subscriber_uri1(),
             &test_lib::helpers::local_topic1_uri(),
@@ -47,12 +42,12 @@ mod tests {
         let _ = subscriptions.add_subscription(
             &test_lib::helpers::subscriber_uri2(),
             &test_lib::helpers::local_topic2_uri(),
-            Some(1000),
+            Some(SystemTime::now() - Duration::from_secs(3600)),
         );
         let _ = subscriptions.add_subscription(
             &test_lib::helpers::subscriber_uri3(),
             &test_lib::helpers::local_topic2_uri(),
-            Some(expiry_in_1s),
+            Some(SystemTime::now() + Duration::from_secs(1)),
         );
 
         let flattened_subscriptions = subscriptions
@@ -98,7 +93,7 @@ mod tests {
         let _ = subscriptions.add_subscription(
             &test_lib::helpers::subscriber_uri2(),
             &test_lib::helpers::local_topic2_uri(),
-            Some(36000),
+            Some(SystemTime::now() - Duration::from_secs(3600)),
         );
 
         let data = subscriptions.get_data();

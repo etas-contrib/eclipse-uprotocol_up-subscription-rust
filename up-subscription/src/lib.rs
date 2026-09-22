@@ -34,6 +34,9 @@ For a batteries-included approach to running up-subscription-rust, the `up-subsc
 
 */
 
+// Adapter types for use by all workspace members
+pub mod adapters;
+
 // public interface for configuring and starting usubscription service
 mod usubscription;
 pub use usubscription::*;
@@ -50,15 +53,15 @@ mod subscription_manager;
 mod persistency;
 
 // RpcServer handler functions, first-level input validation and dispatch to backend logic
-pub(crate) mod handlers {
-    pub(crate) mod fetch_subscribers;
-    pub(crate) mod fetch_subscriptions;
-    pub(crate) mod register_for_notifications;
-    pub(crate) mod reset;
-    pub(crate) mod subscribe;
-    pub(crate) mod unregister_for_notifications;
-    pub(crate) mod unsubscribe;
-}
+// pub(crate) mod handlers {
+//     pub(crate) mod fetch_subscribers;
+//     pub(crate) mod fetch_subscriptions;
+//     pub(crate) mod register_for_notifications;
+//     pub(crate) mod reset;
+//     pub(crate) mod subscribe;
+//     pub(crate) mod unregister_for_notifications;
+//     pub(crate) mod unsubscribe;
+// }
 
 // misc other little helpers and convenience functions
 mod common {

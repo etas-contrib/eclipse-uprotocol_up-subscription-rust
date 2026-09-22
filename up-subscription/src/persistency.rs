@@ -12,17 +12,13 @@
  ********************************************************************************/
 
 use pickledb::{PickleDb, PickleDbDumpPolicy, SerializationMethod};
-use protobuf::Enum;
-use serde::de::Error;
-use std::collections::HashMap;
-use std::{convert::TryInto, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 
-use up_rust::{core::usubscription::State as TopicState, UUri};
+use up_rust::{communication::SubscriptionStatus as TopicState, UUri};
 
 use crate::{
-    helpers,
-    usubscription::{ExpiryTimestamp, SubscriberUUri, TopicUUri},
-    USubscriptionConfiguration,
+    usubscription::{SubscriberUUri, TopicUUri},
+    ExpirationTimestamp, USubscriptionConfiguration,
 };
 
 // Whether to include 'up:' in serialized UUris
@@ -32,9 +28,8 @@ const PERSIST_UP_SCHEMA: bool = true;
 type SubscriberAsString = String;
 type SerializedTopicState = u8;
 
-#[allow(dead_code)] // I have no idea why clippy insists on this here - this type is most definitely being used...
 pub(crate) type SubscriptionSet =
-    HashMap<TopicUUri, HashMap<SubscriberUUri, Option<ExpiryTimestamp>>>;
+    HashMap<TopicUUri, HashMap<SubscriberUUri, Option<ExpirationTimestamp>>>;
 
 #[derive(Debug)]
 pub(crate) enum PersistencyError {
@@ -105,7 +100,7 @@ impl SubscriptionsStore {
         &mut self,
         subscriber: &SubscriberUUri,
         topic: &TopicUUri,
-        expiry: Option<ExpiryTimestamp>,
+        expiration: Option<ExpirationTimestamp>,
     ) -> Result<bool, PersistencyError> {
         // serialize inputs to types used in persistency
         let subscriber_string = &subscriber.to_uri(PERSIST_UP_SCHEMA);
@@ -115,10 +110,10 @@ impl SubscriptionsStore {
             // [impl->req~usubscription-subscribe-multiple~1]
             if let Some(mut subscriber_list) = self
                 .persistency
-                .get::<HashMap<SubscriberAsString, Option<ExpiryTimestamp>>>(topic_string)
+                .get::<HashMap<SubscriberAsString, Option<ExpirationTimestamp>>>(topic_string)
             {
                 // [impl->req~usubscription-subscribe-expiration-extension~1]
-                subscriber_list.insert(subscriber_string.clone(), expiry);
+                subscriber_list.insert(subscriber_string.clone(), expiration);
                 self.persistency
                     .set(topic_string, &subscriber_list)
                     .map_err(|e| {
@@ -131,7 +126,7 @@ impl SubscriptionsStore {
                 self.persistency
                     .set(
                         topic_string,
-                        &HashMap::from([(subscriber_string.clone(), expiry)]),
+                        &HashMap::from([(subscriber_string.clone(), expiration)]),
                     )
                     .map_err(|e| {
                         PersistencyError::internal_error(format!(
@@ -157,7 +152,7 @@ impl SubscriptionsStore {
 
         if let Some(mut subscriber_list) = self
             .persistency
-            .get::<HashMap<SubscriberAsString, Option<ExpiryTimestamp>>>(topic_string)
+            .get::<HashMap<SubscriberAsString, Option<ExpirationTimestamp>>>(topic_string)
         {
             subscriber_list.remove(subscriber_string);
 
@@ -195,7 +190,7 @@ impl SubscriptionsStore {
         // the remote topic is already fully SUBSCRIBED, of still SUSBCRIBED_PENDING
         if let Some(list) = self
             .persistency
-            .get::<HashMap<SubscriberAsString, Option<ExpiryTimestamp>>>(topic_string)
+            .get::<HashMap<SubscriberAsString, Option<ExpirationTimestamp>>>(topic_string)
         {
             for entry in list.keys() {
                 subscribers.push(UUri::try_from(entry.clone()).map_err(|e| {
@@ -221,7 +216,7 @@ impl SubscriptionsStore {
 
         for entry in self.persistency.iter() {
             if let Some(subscribers) =
-                entry.get_value::<HashMap<SubscriberAsString, Option<ExpiryTimestamp>>>()
+                entry.get_value::<HashMap<SubscriberAsString, Option<ExpirationTimestamp>>>()
             {
                 if subscribers.contains_key(subscriber_string) {
                     result_subs.push(UUri::try_from(entry.get_key()).map_err(|e| {
@@ -237,18 +232,22 @@ impl SubscriptionsStore {
     }
 
     /// Returns a flattened list of all subscriptions stored in persistency
-    /// * returns `Vec<(SubscriberUUri, TopicUUri, Option<ExpiryTimestamp>)` that contains all subscribers and their associated subscription topics
+    /// * returns `Vec<(SubscriberUUri, TopicUUri, Option<ExpirationTimestamp>)` that contains all subscribers and their associated subscription topics
     /// * returns a `PersistencyError` in case of problems with serialization of data or manipulation of persist storage
     pub(crate) fn get_flattened_subscriptions(
         &mut self,
-    ) -> Result<Vec<(SubscriberUUri, TopicUUri, Option<ExpiryTimestamp>)>, PersistencyError> {
-        let mut flattened_subscriptions: Vec<(SubscriberUUri, TopicUUri, Option<ExpiryTimestamp>)> =
-            Vec::new();
+    ) -> Result<Vec<(SubscriberUUri, TopicUUri, Option<ExpirationTimestamp>)>, PersistencyError>
+    {
+        let mut flattened_subscriptions: Vec<(
+            SubscriberUUri,
+            TopicUUri,
+            Option<ExpirationTimestamp>,
+        )> = Vec::new();
 
         // Extract every subscription entry that carries an expiration timestamp value
         for topic_subs in self.persistency.iter() {
             if let Some(entry) =
-                topic_subs.get_value::<HashMap<SubscriberAsString, Option<ExpiryTimestamp>>>()
+                topic_subs.get_value::<HashMap<SubscriberAsString, Option<ExpirationTimestamp>>>()
             {
                 for (subscriber, expiry) in entry.iter() {
                     flattened_subscriptions.push((
@@ -277,22 +276,23 @@ impl SubscriptionsStore {
     // [impl->req~usubscription-subscribe-no-expiration~1]
     pub(crate) fn get_and_prune_expiring_subscriptions(
         &mut self,
-    ) -> Result<Vec<(SubscriberUUri, TopicUUri, ExpiryTimestamp)>, PersistencyError> {
+    ) -> Result<Vec<(SubscriberUUri, TopicUUri, ExpirationTimestamp)>, PersistencyError> {
         // Extract every subscription entry that carries an expiration timestamp value
-        let mut expiring_subscriptions: Vec<(SubscriberUUri, TopicUUri, ExpiryTimestamp)> = self
-            .get_flattened_subscriptions()?
-            .into_iter()
-            .filter_map(|(subscriber, topic, expiry)| expiry.map(|exp| (subscriber, topic, exp)))
-            .collect();
+        let mut expiring_subscriptions: Vec<(SubscriberUUri, TopicUUri, ExpirationTimestamp)> =
+            self.get_flattened_subscriptions()?
+                .into_iter()
+                .filter_map(|(subscriber, topic, expiration)| {
+                    expiration.map(|exp| (subscriber, topic, exp))
+                })
+                .collect();
 
         // Remove every expiration-subscription entry that has already expired from persistency
-        expiring_subscriptions.retain(|(subscriber, topic, expiry)| {
-            if helpers::duration_until_timestamp(*expiry).is_none() {
-                // Timestamp expiry is in the past, so remove it from persistency,
+        expiring_subscriptions.retain(|(subscriber, topic, expiration)| {
+            if *expiration <= SystemTime::now() {
                 let _ = self.remove_subscription(subscriber, topic);
-                false // and remove this entry from the collection
+                false
             } else {
-                true // Keep this entry
+                true
             }
         });
 
@@ -330,7 +330,7 @@ impl SubscriptionsStore {
             let mut topic_subscribers = HashMap::new();
 
             if let Some(list) =
-                entry.get_value::<HashMap<SubscriberAsString, Option<ExpiryTimestamp>>>()
+                entry.get_value::<HashMap<SubscriberAsString, Option<ExpirationTimestamp>>>()
             {
                 for (subscriber, expiry) in list {
                     topic_subscribers.insert(
@@ -369,7 +369,7 @@ impl SubscriptionsStore {
                     &subscribers
                         .iter()
                         .map(|(u, e)| (u.to_uri(PERSIST_UP_SCHEMA), *e))
-                        .collect::<HashMap<SubscriberAsString, Option<ExpiryTimestamp>>>(),
+                        .collect::<HashMap<SubscriberAsString, Option<ExpirationTimestamp>>>(),
                 )
                 .map_err(|e| {
                     PersistencyError::serialization_error(format!(
@@ -412,11 +412,11 @@ impl RemoteTopicsStore {
         Ok(if self.persistency.exists(topic_string) {
             let bytes = self
                 .persistency
-                .get::<Vec<SerializedTopicState>>(topic_string)
+                .get::<SerializedTopicState>(topic_string)
                 .ok_or(PersistencyError::internal_error(
                     "Error retrieving remote topic state from persistency",
                 ))?;
-            Some(deserialize_topic_state(&bytes).map_err(|e| {
+            Some(deserialize_topic_state(bytes).map_err(|e| {
                 PersistencyError::serialization_error(format!(
                     "Error deserializing topic state {e}"
                 ))
@@ -435,15 +435,13 @@ impl RemoteTopicsStore {
         state: TopicState,
     ) -> Result<TopicState, PersistencyError> {
         let topic_string = &topic.to_uri(Self::PERSIST_UP_SCHEMA);
-        let bytes = serialize_topic_state(&state).map_err(|e| {
-            PersistencyError::serialization_error(format!("Error serializing topic state {e}"))
-        })?;
-
-        self.persistency.set(topic_string, &bytes).map_err(|e| {
-            PersistencyError::internal_error(format!(
-                "Error setting remote topic state in persistency {e}"
-            ))
-        })?;
+        self.persistency
+            .set(topic_string, &serialize_topic_state(&state))
+            .map_err(|e| {
+                PersistencyError::internal_error(format!(
+                    "Error setting remote topic state in persistency {e}"
+                ))
+            })?;
 
         Ok(state)
     }
@@ -461,18 +459,18 @@ impl RemoteTopicsStore {
         Ok(if self.persistency.exists(topic_string) {
             let bytes = self
                 .persistency
-                .get::<Vec<SerializedTopicState>>(topic_string)
+                .get::<SerializedTopicState>(topic_string)
                 .ok_or(PersistencyError::internal_error(
                     "Error retrieving remote topic state from persistency",
                 ))?;
-            deserialize_topic_state(&bytes).map_err(|e| {
+            deserialize_topic_state(bytes).map_err(|e| {
                 PersistencyError::serialization_error(format!(
                     "Error deserializing topic state {e}"
                 ))
             })?
         } else {
             // [impl->req~usubscription-subscribe-remote-pending~1]
-            self.set_topic_state(topic, TopicState::SUBSCRIBE_PENDING)?
+            self.set_topic_state(topic, TopicState::SubscribePending)?
         })
     }
 
@@ -504,8 +502,8 @@ impl RemoteTopicsStore {
         let mut map: HashMap<TopicUUri, TopicState> = HashMap::new();
 
         for kv in self.persistency.iter() {
-            if let Some(bytes) = kv.get_value::<Vec<SerializedTopicState>>() {
-                let value = deserialize_topic_state(&bytes)?;
+            if let Some(bytes) = kv.get_value::<SerializedTopicState>() {
+                let value = deserialize_topic_state(bytes)?;
                 map.insert(UUri::try_from(kv.get_key())?, value);
             }
         }
@@ -522,7 +520,7 @@ impl RemoteTopicsStore {
         for (key, value) in map {
             let _r = self.persistency.set(
                 &key.to_uri(Self::PERSIST_UP_SCHEMA),
-                &serialize_topic_state(&value)?,
+                &serialize_topic_state(&value),
             );
         }
         Ok(())
@@ -697,19 +695,25 @@ impl NotificationStore {
     }
 }
 
-fn serialize_topic_state(
-    state: &TopicState,
-) -> Result<Vec<SerializedTopicState>, Box<dyn std::error::Error>> {
-    Ok(state.value().to_le_bytes().to_vec())
+fn serialize_topic_state(state: &TopicState) -> SerializedTopicState {
+    match state {
+        TopicState::Unsubscribed => 0,
+        TopicState::SubscribePending => 1,
+        TopicState::Subscribed => 2,
+        TopicState::UnsubscribePending => 3,
+    }
 }
 
-fn deserialize_topic_state(
-    bytes: &[SerializedTopicState],
-) -> Result<TopicState, Box<dyn std::error::Error>> {
-    Ok(
-        TopicState::from_i32(i32::from_le_bytes(bytes[..4].try_into()?))
-            .ok_or_else(|| serde::de::value::Error::custom("Invalid TopicState value"))?,
-    )
+fn deserialize_topic_state(v: SerializedTopicState) -> Result<TopicState, PersistencyError> {
+    match v {
+        0 => Ok(TopicState::Unsubscribed),
+        1 => Ok(TopicState::SubscribePending),
+        2 => Ok(TopicState::Subscribed),
+        3 => Ok(TopicState::UnsubscribePending),
+        _ => Err(PersistencyError::serialization_error(
+            "invalid TopicState value",
+        )),
+    }
 }
 
 // Return a notification store instance, configured according to a USubscriptionConfiguration
@@ -769,21 +773,17 @@ mod tests {
     use super::*;
     use test_case::test_case;
 
-    #[test_case(TopicState::UNSUBSCRIBED, &[0,0,0,0]; "State UNSUBSCRIBED")]
-    #[test_case(TopicState::SUBSCRIBE_PENDING, &[1,0,0,0]; "State SUBSCRIBE_PENDING")]
-    #[test_case(TopicState::SUBSCRIBED, &[2,0,0,0]; "State SUBSCRIBED")]
-    #[test_case(TopicState::UNSUBSCRIBE_PENDING, &[3,0,0,0]; "State UNSUBSCRIBE_PENDING")]
+    #[test_case(TopicState::Unsubscribed; "State UNSUBSCRIBED")]
+    #[test_case(TopicState::SubscribePending; "State SUBSCRIBE_PENDING")]
+    #[test_case(TopicState::Subscribed; "State SUBSCRIBED")]
+    #[test_case(TopicState::UnsubscribePending; "State UNSUBSCRIBE_PENDING")]
     #[test_log::test(tokio::test)]
-    async fn test_serialize_deserialize_topic_state(state: TopicState, bytes: &[u8]) {
+    async fn test_serialize_deserialize_topic_state(state: TopicState) {
         // One way...
         let serialized_bytes = serialize_topic_state(&state);
-        assert!(serialized_bytes.is_ok());
-
-        let serialized_bytes = serialized_bytes.unwrap();
-        assert_eq!(bytes, serialized_bytes);
 
         // ... then the other
-        let reconstructed_state = deserialize_topic_state(bytes);
+        let reconstructed_state = deserialize_topic_state(serialized_bytes);
         assert!(reconstructed_state.is_ok());
 
         let reconstructed_state = reconstructed_state.unwrap();
