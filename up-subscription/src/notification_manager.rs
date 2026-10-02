@@ -23,9 +23,12 @@ use up_rust::{
 
 use crate::{
     persistency::{self, PersistencyError},
-    usubscription::{SubscriberUUri, TopicUUri, INCLUDE_SCHEMA},
+    usubscription::{SubscriberUUri, TopicUUri},
     USubscriptionConfiguration,
 };
+
+/// Whether to include 'up:' uProtocol schema prefix in URIs in log and error messages
+pub const INCLUDE_SCHEMA: bool = false;
 
 // From usubscription.proto, the uprotocol.notification_topic resource ID
 pub(crate) const SOURCE_URI_RESOURCE_ID: u16 = 0x8000;
@@ -174,9 +177,12 @@ pub(crate) async fn notification_engine(
                 // Send Update message to general notification channel
                 // as per usubscription.proto RegisterForNotifications(NotificationsRequest)
                 // [impl->dsn~usubscription-change-notification-topic~1]
-                match UMessageBuilder::publish(usubscription_uri(RESOURCE_ID_SUBSCRIPTION_CHANGE))
-                    .with_message_id(UUID::build())
-                    .build_with_protobuf_payload(&update)
+                match UMessageBuilder::publish(usubscription_uri(
+                    None,
+                    RESOURCE_ID_SUBSCRIPTION_CHANGE,
+                ))
+                .with_message_id(UUID::build())
+                .build_with_protobuf_payload(&update)
                 {
                     Err(e) => {
                         error!("Error building global update notification message: {e}");
@@ -231,7 +237,7 @@ pub(crate) async fn notification_engine(
             NotificationEvent::GetNotificationTopics { respond_to } => {
                 let _r = respond_to.send(
                     notifications
-                        .get_data()
+                        .get_all_notification_registrations()
                         .expect("Error getting notification store contents"),
                 );
             }
@@ -240,9 +246,7 @@ pub(crate) async fn notification_engine(
                 notification_topics_replacement,
                 respond_to,
             } => {
-                notifications
-                    .set_data(notification_topics_replacement)
-                    .expect("Error setting notification store contents");
+                notifications.set_data(notification_topics_replacement);
                 let _r = respond_to.send(());
             }
         }

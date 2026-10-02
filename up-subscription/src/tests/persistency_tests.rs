@@ -38,20 +38,23 @@ mod tests {
             &test_lib::helpers::subscriber_uri1(),
             &test_lib::helpers::local_topic1_uri(),
             None,
+            None,
         );
         let _ = subscriptions.add_subscription(
             &test_lib::helpers::subscriber_uri2(),
             &test_lib::helpers::local_topic2_uri(),
             Some(SystemTime::now() - Duration::from_secs(3600)),
+            None,
         );
         let _ = subscriptions.add_subscription(
             &test_lib::helpers::subscriber_uri3(),
             &test_lib::helpers::local_topic2_uri(),
             Some(SystemTime::now() + Duration::from_secs(1)),
+            None,
         );
 
         let flattened_subscriptions = subscriptions
-            .get_flattened_subscriptions()
+            .get_all_subscriptions()
             .expect("Error interacting with subscription persistency");
         assert!(
             flattened_subscriptions.len() == 3,
@@ -89,21 +92,23 @@ mod tests {
             &test_lib::helpers::subscriber_uri1(),
             &test_lib::helpers::local_topic1_uri(),
             None,
+            None,
         );
         let _ = subscriptions.add_subscription(
             &test_lib::helpers::subscriber_uri2(),
             &test_lib::helpers::local_topic2_uri(),
             Some(SystemTime::now() - Duration::from_secs(3600)),
+            None,
         );
 
-        let data = subscriptions.get_data();
+        let data = subscriptions.get_all_subscriptions();
         assert!(data.is_ok());
         assert_eq!(data.unwrap().len(), 2);
 
         let r = subscriptions.reset();
         assert!(r.is_ok());
 
-        let data = subscriptions.get_data();
+        let data = subscriptions.get_all_subscriptions();
         assert!(data.is_ok());
         assert_eq!(data.unwrap().len(), 0);
     }
@@ -113,8 +118,8 @@ mod tests {
     async fn test_reset_remote_subscriptions() {
         let mut remote_topics = persistency::RemoteTopicsStore::new(&get_configuration());
 
-        let _ = remote_topics.add_topic_or_get_state(&test_lib::helpers::local_topic1_uri());
-        let _ = remote_topics.add_topic_or_get_state(&test_lib::helpers::local_topic2_uri());
+        let _ = remote_topics.add_topic_or_get_status(&test_lib::helpers::local_topic1_uri());
+        let _ = remote_topics.add_topic_or_get_status(&test_lib::helpers::local_topic2_uri());
 
         let data = remote_topics.get_data();
         assert!(data.is_ok());
@@ -147,14 +152,14 @@ mod tests {
             )
             .expect("Error adding test data set");
 
-        let data = notifications.get_data();
+        let data = notifications.get_all_notification_registrations();
         assert!(data.is_ok());
         assert_eq!(data.unwrap().len(), 2);
 
         let r = notifications.reset();
         assert!(r.is_ok());
 
-        let data = notifications.get_data();
+        let data = notifications.get_all_notification_registrations();
         assert!(data.is_ok());
         assert_eq!(data.unwrap().len(), 0);
     }
@@ -173,7 +178,7 @@ mod tests {
         );
 
         // Should be two entries
-        let data = notifications.get_data();
+        let data = notifications.get_all_notification_registrations();
         assert!(data.is_ok());
         assert_eq!(data.unwrap().len(), 2);
     }
@@ -192,7 +197,7 @@ mod tests {
         );
 
         // Should be two entries
-        let data = notifications.get_data();
+        let data = notifications.get_all_notification_registrations();
         assert!(data.is_ok());
         assert_eq!(data.unwrap().len(), 2);
     }

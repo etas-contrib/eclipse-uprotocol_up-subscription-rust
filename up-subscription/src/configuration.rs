@@ -41,7 +41,7 @@ impl std::fmt::Display for ConfigurationError {
 
 impl std::error::Error for ConfigurationError {}
 
-// only accept persistency path if it points to an existing directory; if None set to cwd
+// only accept persistency path if it points to an existing directory; if None, set to current working directory
 fn get_storage_path(path: Option<String>) -> Result<PathBuf, ConfigurationError> {
     match path {
         None => Ok(std::env::current_dir().map_err(|e| {

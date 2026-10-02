@@ -134,11 +134,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(DynTransport::new(transport.clone())),
         Arc::new(DynUriProvider::new(config.clone())),
     );
-    let (service, stopper) = USubscriptionService::new(config, transport)
-        .run()
-        .await
-        .inspect_err(|e| error!("Error starting uSubscription service: {}", e))?;
-    let service = Arc::new(service);
+    let service = Arc::new(
+        USubscriptionService::new(config, transport)
+            .run()
+            .await
+            .inspect_err(|e| error!("Error starting uSubscription service: {}", e))?,
+    );
 
     rpc_server
         .register_endpoint(None, RESOURCE_ID_SUBSCRIBE, service.clone())
@@ -147,7 +148,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .register_endpoint(None, RESOURCE_ID_UNSUBSCRIBE, service.clone())
         .await?;
 
+    // Wait for kill signal
     signal::ctrl_c().await.expect("failed to listen for event");
-    stopper.stop().await;
+
+    // Drop the RPC server's references so the Arc can be unwrapped for stopping uSubscription service
+    rpc_server
+        .unregister_endpoint(None, RESOURCE_ID_SUBSCRIBE, service.clone())
+        .await?;
+    rpc_server
+        .unregister_endpoint(None, RESOURCE_ID_UNSUBSCRIBE, service.clone())
+        .await?;
+
+    Arc::try_unwrap(service)
+        .unwrap_or_else(|_| panic!("uSubscription service still has outstanding references"))
+        .stop()
+        .await;
     Ok(())
 }

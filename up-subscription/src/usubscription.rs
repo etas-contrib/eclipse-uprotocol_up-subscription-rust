@@ -12,7 +12,6 @@
  ********************************************************************************/
 
 use std::sync::Arc;
-use std::time::SystemTime;
 use tokio::{
     sync::{
         mpsc::{self, Sender},
@@ -20,15 +19,8 @@ use tokio::{
     },
     task::JoinHandle,
 };
-
-use crate::{
-    adapters::{DynTransport, DynUriProvider},
-    helpers,
-    notification_manager::{self, NotificationEvent},
-    subscription_manager::{self, SubscriptionEvent},
-    USubscriptionConfiguration,
-};
 use tracing::{error, info};
+
 use up_rust::{
     communication::{
         InMemoryRpcClient, RequestHandler, ServiceInvocationError, SubscriptionStatus, UPayload,
@@ -40,8 +32,13 @@ use up_rust::{
     UAttributes, UCode, UStatus, UTransport, UUri,
 };
 
-/// Whether to include 'up:' uProtocol schema prefix in URIs in log and error messages
-pub const INCLUDE_SCHEMA: bool = false;
+use crate::{
+    adapters::{DynTransport, DynUriProvider},
+    helpers,
+    notification_manager::{self, NotificationEvent},
+    subscription_manager::{self, SubscriptionEvent},
+    USubscriptionConfiguration,
+};
 
 // Remote-subscribe operation ttl; 5 minutes in milliseconds, as per https://github.com/eclipse-uprotocol/up-spec/tree/main/up-l3/usubscription/v3#6-timeout--retry-logic
 pub(crate) const UP_REMOTE_TTL: u32 = 300000;
@@ -49,7 +46,6 @@ pub(crate) const UP_REMOTE_TTL: u32 = 300000;
 // Alias definitions to provide more clarity, and make it easier to accomodate potential changes to expiry type in up-spec
 pub(crate) type SubscriberUUri = UUri;
 pub(crate) type TopicUUri = UUri;
-pub(crate) type ExpirationTimestamp = SystemTime;
 
 /// This trait primarily serves to provide a hook-point for using the mockall crate, for mocking USubscriptionService objects
 /// where we also need/want to inject custom/mock UTransport implementations that subsequently get used in test cases.
@@ -62,34 +58,14 @@ impl<S> UTransportHolder for USubscriptionService<S> {
     }
 }
 
-/// This object holds all mutable content associated with a running `USubscriptionService`, and is populated and returned when
-/// calling `USubscriptionService::run()`. It exists for two reasons: a) allow `USubscriptionService` to remain useable as an immutable
-/// object that can be put into `Arc`s and passed around freely, while b) offering a well-defined way to stop a running `USubscriptionService`
-/// by simply calling `USubscriptionStopper::stop()`.
-pub struct USubscriptionStopper {
-    shutdown_notification: Arc<Notify>,
-    subscription_joiner: JoinHandle<()>,
-    notification_joiner: JoinHandle<()>,
-}
-
-impl USubscriptionStopper {
-    pub async fn stop(self) {
-        info!("Stopping uSubscription service");
-        self.shutdown_notification.notify_waiters();
-        self.subscription_joiner
-            .await
-            .expect("Error shutting down subscription manager");
-        self.notification_joiner
-            .await
-            .expect("Error shutting down notification manager");
-    }
-}
-
 /// USubscriptionService, compile-time enforced type-state pattern
 pub struct Idle;
 pub struct Running {
     subscription_sender: Sender<SubscriptionEvent>,
-    notification_sender: Sender<NotificationEvent>,
+
+    shutdown_notification: Arc<Notify>,
+    subscription_joiner: JoinHandle<()>,
+    notification_joiner: JoinHandle<()>,
 }
 pub struct USubscriptionService<S = Idle> {
     config: Arc<USubscriptionConfiguration>,
@@ -106,9 +82,7 @@ impl USubscriptionService<Idle> {
         }
     }
 
-    pub async fn run(
-        self,
-    ) -> Result<(USubscriptionService<Running>, USubscriptionStopper), UStatus> {
+    pub async fn run(self) -> Result<USubscriptionService<Running>, UStatus> {
         let shutdown_notification = Arc::new(Notify::new());
         let (notification_sender, notification_receiver) =
             mpsc::channel::<NotificationEvent>(self.config.notification_command_buffer.into());
@@ -156,21 +130,31 @@ impl USubscriptionService<Idle> {
             Ok(())
         });
 
-        Ok((
-            USubscriptionService {
-                config: self.config,
-                transport: self.transport,
-                state: Running {
-                    subscription_sender,
-                    notification_sender,
-                },
-            },
-            USubscriptionStopper {
+        Ok(USubscriptionService {
+            config: self.config,
+            transport: self.transport,
+            state: Running {
+                subscription_sender,
                 subscription_joiner,
                 notification_joiner,
                 shutdown_notification,
             },
-        ))
+        })
+    }
+}
+
+impl USubscriptionService<Running> {
+    pub async fn stop(self) {
+        info!("Stopping uSubscription service");
+        self.state.shutdown_notification.notify_waiters();
+        self.state
+            .subscription_joiner
+            .await
+            .expect("Error shutting down subscription manager");
+        self.state
+            .notification_joiner
+            .await
+            .expect("Error shutting down notification manager");
     }
 }
 
@@ -209,7 +193,6 @@ impl RequestHandler for USubscriptionService<Running> {
                         "Error processing request".to_string(),
                     ));
                 };
-
                 USubscriptionResponse::Subscribe(SubscribeResponse {
                     topic: req.topic,
                     status,

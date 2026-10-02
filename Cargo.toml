@@ -40,7 +40,7 @@ tracing = { version = "0.1.44", default-features = false, features = [
     "log",
     "std",
 ] }
-up-rust = { git = "https://github.com/eclipse-uprotocol/up-rust", rev = "e24c778", features = [
+up-rust = { git = "https://github.com/eclipse-uprotocol/up-rust", rev = "a34317d", features = [
     "up-core-types",
     "up-l2-rpc-server",
     "usubscription",

@@ -39,15 +39,44 @@ pub(crate) fn is_equivalent_umessage(first_message: &UMessage, other_message: &U
 pub(crate) mod mocks {
     use async_trait::async_trait;
     use mockall::mock;
-    use std::sync::{Arc, Mutex};
+    use std::{
+        sync::{Arc, Mutex},
+        time::{Duration, SystemTime},
+    };
 
     use up_rust::UMessageBuilder;
     use up_rust::{
-        communication::{CallOptions, RpcClient, ServiceInvocationError, UPayload},
+        communication::{
+            CallOptions, RpcClient, ServiceInvocationError, SubscriptionStatus, UPayload,
+        },
+        core::usubscription::{SubscriptionInfo, USubscription},
         MockTransport, ProtobufMappable, UListener, UMessage, UStatus, UUri,
     };
 
     use crate::test_lib;
+
+    mock! {
+    pub(crate) RpcClientUSubscriptionMock {}
+
+    #[async_trait]
+    impl USubscription for RpcClientUSubscriptionMock {
+        async fn subscribe(
+            &self,
+            topic: &UUri,
+            expiration: Option<SystemTime>,
+            sample_period: Option<Duration>,
+        ) -> Result<SubscriptionStatus, UStatus>;
+        async fn unsubscribe(&self, topic: &UUri) -> Result<(), UStatus>;
+        async fn fetch_subscriptions(
+            &self,
+            topic_filter: Option<UUri>,
+            subscriber_filter: Option<UUri>,
+        ) -> Result<Vec<SubscriptionInfo>, UStatus>;
+        async fn register_for_notifications(&self) -> Result<(), UStatus>;
+        async fn unregister_for_notifications(&self) -> Result<(), UStatus>;
+        async fn reset(&self) -> Result<(), UStatus>;
+        }
+    }
 
     mock! {
         pub(crate) RpcClientMock {}
@@ -151,10 +180,7 @@ pub(crate) mod mocks {
 // Various methods for constructing helper objects to be used in tests
 #[cfg(test)]
 pub(crate) mod helpers {
-    use up_rust::{
-        core::usubscription::{USUBSCRIPTION_TYPE_ID, USUBSCRIPTION_VERSION_MAJOR},
-        UUri,
-    };
+    use up_rust::UUri;
 
     pub(crate) const LOCAL_AUTHORITY: &str = "local";
     pub(crate) const REMOTE_AUTHORITY: &str = "remote";
@@ -216,27 +242,6 @@ pub(crate) mod helpers {
             SUBSCRIBER3_ID,
             SUBSCRIBER3_VERSION,
             SUBSCRIBER3_RESOURCE,
-        )
-        .expect("expecting to be able to create UUri for test")
-    }
-
-    pub(crate) fn local_usubscription_service_uri() -> UUri {
-        UUri::try_from_parts(
-            LOCAL_AUTHORITY,
-            USUBSCRIPTION_TYPE_ID as u32,
-            USUBSCRIPTION_VERSION_MAJOR,
-            0x0000,
-        )
-        .expect("expecting to be able to create UUri for test")
-    }
-
-    #[allow(dead_code)] // final decision on removing this to happen after functional spec alignment is complete
-    pub(crate) fn notification_topic_uri() -> UUri {
-        UUri::try_from_parts(
-            LOCAL_AUTHORITY,
-            NOTIFICATION_TOPIC_ID,
-            NOTIFICATION_TOPIC_VERSION,
-            NOTIFICATION_TOPIC_RESOURCE,
         )
         .expect("expecting to be able to create UUri for test")
     }

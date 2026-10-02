@@ -24,6 +24,8 @@ version.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 pickledb = { version = "0.5.1" }
+redb = { version = "4.3.0" }
+redb-derive = { version = "0.1.0" }
 serde = { version = "1.0.229" }
 tokio = { workspace = true }
 tracing = { workspace = true }

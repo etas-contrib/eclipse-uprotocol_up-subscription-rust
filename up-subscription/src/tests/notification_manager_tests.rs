@@ -220,7 +220,7 @@ mod tests {
         // this is the generic update channel notification, that always is sent
         // [utest->dsn~usubscription-change-notification-topic~1]
         let expected_message_general_channel =
-            UMessageBuilder::publish(usubscription_uri(RESOURCE_ID_SUBSCRIPTION_CHANGE))
+            UMessageBuilder::publish(usubscription_uri(None, RESOURCE_ID_SUBSCRIPTION_CHANGE))
                 .with_message_id(UUID::build())
                 .build_with_protobuf_payload(&expected_update)
                 .unwrap();
@@ -257,7 +257,7 @@ mod tests {
 
         // this is the generic update channel notification, that always is sent
         let expected_message_general_channel =
-            UMessageBuilder::publish(usubscription_uri(RESOURCE_ID_SUBSCRIPTION_CHANGE))
+            UMessageBuilder::publish(usubscription_uri(None, RESOURCE_ID_SUBSCRIPTION_CHANGE))
                 .with_message_id(UUID::build())
                 .build_with_protobuf_payload(&expected_update)
                 .unwrap();
@@ -313,7 +313,7 @@ mod tests {
 
         // this is the generic update channel notification, that always is sent
         let expected_message_general_channel =
-            UMessageBuilder::publish(usubscription_uri(RESOURCE_ID_SUBSCRIPTION_CHANGE))
+            UMessageBuilder::publish(usubscription_uri(None, RESOURCE_ID_SUBSCRIPTION_CHANGE))
                 .with_message_id(UUID::build())
                 .build_with_protobuf_payload(&expected_update)
                 .unwrap();
